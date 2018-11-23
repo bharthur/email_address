@@ -3,6 +3,7 @@
 require 'resolv'
 require 'netaddr'
 require 'socket'
+require 'json'
 
 module EmailAddress
   class Exchanger
@@ -51,6 +52,8 @@ module EmailAddress
     # be good in this context, but in "listen" context it means "all bound IP's"
     def mxers
       return [["example.com", "0.0.0.0", 1]] if @config[:dns_lookup] == :off
+      records = cached_records
+      return records if records.present?
       @mxers ||= Resolv::DNS.open do |dns|
         ress = dns.getresources(@host, Resolv::DNS::Resource::IN::MX)
         records = ress.map do |r|
@@ -63,9 +66,18 @@ module EmailAddress
           rescue SocketError # not found, but could also mean network not work or it could mean one record doesn't resolve an address
             nil
           end
-        end
-        records.compact
+        end.compact
+        @config[:rediscli].set("#{@host}_mxers", records.to_json) if @config[:rediscli].present?
+        records
       end
+    end
+
+    def cached_records
+      return nil unless @config[:rediscli].present?
+      res = @config[:rediscli].get("#{@host}_mxers")
+      res.present? ? JSON.parse(res) : nil
+    rescue StandardError
+      nil
     end
 
     # Returns Array of domain names for the MX'ers, used to determine the Provider
